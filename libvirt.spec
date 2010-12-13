@@ -5,15 +5,6 @@
 # Default to a full server + client build
 %define client_only        0
 
-# Now turn off server build in certain cases
-
-# RHEL-5 builds are client-only for s390, ppc
-%if 0%{?rhel} == 5
-%ifnarch i386 i586 i686 x86_64 ia64
-%define client_only        1
-%endif
-%endif
-
 # Disable all server side drivers if client only build requested
 %if %{client_only}
 %define server_drivers     0
@@ -27,7 +18,8 @@
 
 # First the daemon itself
 %define with_libvirtd      0%{!?_without_libvirtd:%{server_drivers}}
-%define with_avahi         0%{!?_without_avahi:%{server_drivers}}
+#%define with_avahi         0%{!?_without_avahi:%{server_drivers}}
+%define with_avahi         0
 
 # Then the hypervisor drivers that run on local host
 %define with_xen           0%{!?_without_xen:%{server_drivers}}
@@ -57,7 +49,6 @@
 # A few optional bits off by default, we enable later
 %define with_polkit        0%{!?_without_polkit:0}
 %define with_capng         0%{!?_without_capng:0}
-%define with_netcf         0%{!?_without_netcf:0}
 %define with_udev          0%{!?_without_udev:0}
 %define with_hal           0%{!?_without_hal:0}
 %define with_yajl          0%{!?_without_yajl:0}
@@ -69,23 +60,23 @@
 
 # Finally set the OS / architecture specific special cases
 
-# Xen is available only on i386 x86_64 ia64
-%ifnarch i386 i586 i686 x86_64 ia64
-%define with_xen 0
-%endif
-
-# Numactl is not available on s390[x]
-%ifarch s390 s390x
-%define with_numactl 0
-%endif
-
+# RHEL doesn't ship OpenVZ, VBox, UML, OpenNebula, PowerHypervisor or ESX
+#%if 0%{?rhel}
 %define with_openvz 0
 %define with_vbox 0
 %define with_uml 0
 %define with_one 0
 %define with_phyp 0
 %define with_esx 0
+#%endif
+
+# RHEL-5 has restricted QEMU to x86_64 only and is too old for LXC
+#%if 0%{?rhel} == 5
+%ifnarch x86_64
+%define with_qemu 0
+%endif
 %define with_lxc 0
+#%endif
 
 # RHEL-6 has restricted QEMU to x86_64 only, stopped including Xen
 # on all archs. Other archs all have LXC available though
@@ -120,17 +111,14 @@
 %define with_capng     0%{!?_without_capng:1}
 %endif
 
-# netcf is used to manage network interfaces in Fedora 12 / RHEL-6 or newer
-%if 0%{?fedora} >= 12 || 0%{?rhel} >= 6
-%define with_netcf     0%{!?_without_netcf:%{server_drivers}}
-%endif
-
 # udev is used to manage host devices in Fedora 12 / RHEL-6 or newer
 %if 0%{?fedora} >= 12 || 0%{?rhel} >= 6
 %define with_udev     0%{!?_without_udev:%{server_drivers}}
 %else
 %define with_hal       0%{!?_without_hal:%{server_drivers}}
 %endif
+# force hal
+%define with_hal 1
 
 # Enable yajl library for JSON mode with QEMU
 %if 0%{?fedora} >= 13 || 0%{?rhel} >= 6
@@ -149,21 +137,21 @@
 
 # The RHEL-5 Xen package has some feature backports. This
 # flag is set to enable use of those special bits on RHEL-5
-%if 0%{?rhel} == 5
+#%if 0%{?rhel} == 5
 %define with_rhel5  1
-%else
-%define with_rhel5  0
-%endif
-
+#%else
+#%define with_rhel5  0
+#%endif
 
 Summary: Library providing a simple API virtualization
 Name: libvirt
-Version: 0.7.7
+Version: 0.8.4
 #Release: 1%{?dist}%{?extra_release}
-Release: 2.abiquo
+Release: 4%{?dist}
 License: LGPLv2+
 Group: Development/Libraries
 Source: http://libvirt.org/sources/libvirt-%{version}.tar.gz
+Source1: disable-nf-bridge.conf
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
 URL: http://libvirt.org/
 BuildRequires: python-devel
@@ -317,9 +305,7 @@ BuildRequires: libcap-ng-devel >= 0.5.0
 %if %{with_phyp}
 BuildRequires: libssh2-devel
 %endif
-%if %{with_netcf}
-BuildRequires: netcf-devel >= 0.1.4
-%endif
+BuildRequires: libxslt-devel
 
 # Fedora build root suckage
 BuildRequires: gawk
@@ -434,9 +420,9 @@ of recent versions of Linux (and other OSes).
 %define _without_one --without-one
 %endif
 
-%if %{with_rhel5}
+#%if %{with_rhel5}
 %define _with_rhel5_api --with-rhel5-api
-%endif
+#%endif
 
 %if ! %{with_network}
 %define _without_network --without-network
@@ -468,10 +454,6 @@ of recent versions of Linux (and other OSes).
 
 %if ! %{with_capng}
 %define _without_capng --without-capng
-%endif
-
-%if ! %{with_netcf}
-%define _without_netcf --without-netcf
 %endif
 
 %if ! %{with_selinux}
@@ -513,7 +495,6 @@ of recent versions of Linux (and other OSes).
            %{?_without_storage_mpath} \
            %{?_without_numactl} \
            %{?_without_capng} \
-           %{?_without_netcf} \
            %{?_without_selinux} \
            %{?_without_hal} \
            %{?_without_udev} \
@@ -581,7 +562,12 @@ rm -rf $RPM_BUILD_ROOT%{_sysconfdir}/libvirt/lxc.conf
 
 %if %{with_libvirtd}
 chmod 0644 $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/libvirtd
+mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/modprobe.d/
+install -m 644 $RPM_SOURCE_DIR/disable-nf-bridge.conf \
+   $RPM_BUILD_ROOT%{_sysconfdir}/modprobe.d/disable-nf-bridge.conf
 %endif
+
+
 
 %clean
 rm -fr %{buildroot}
@@ -647,13 +633,20 @@ fi
 %dir %attr(0700, root, root) %{_sysconfdir}/libvirt/qemu/networks/autostart
 %endif
 
+%{_sysconfdir}/modprobe.d/disable-nf-bridge.conf
 %{_sysconfdir}/rc.d/init.d/libvirtd
+%{_sysconfdir}/rc.d/init.d/libvirt-guests
 %config(noreplace) %{_sysconfdir}/sysconfig/libvirtd
+%config(noreplace) %{_sysconfdir}/sysconfig/libvirt-guests
 %config(noreplace) %{_sysconfdir}/libvirt/libvirtd.conf
-%config(noreplace) %{_sysconfdir}/logrotate.d/libvirtd
+%config(noreplace) %{_sysconfdir}/logrotate.d/libvirtd.lxc
+%config(noreplace) %{_sysconfdir}/logrotate.d/libvirtd.qemu
+%config(noreplace) %{_sysconfdir}/logrotate.d/libvirtd.uml
 %dir %attr(0700, root, root) %{_localstatedir}/log/libvirt/qemu/
 %dir %attr(0700, root, root) %{_localstatedir}/log/libvirt/lxc/
 %dir %attr(0700, root, root) %{_localstatedir}/log/libvirt/uml/
+
+%config(noreplace) %{_sysconfdir}/libvirt/nwfilter
 
 %if %{with_qemu}
 %config(noreplace) %{_sysconfdir}/libvirt/qemu.conf
@@ -729,7 +722,10 @@ fi
 %attr(0755, root, root) %{_sbindir}/libvirtd
 
 %doc docs/*.xml
+
+%{_mandir}/man8/libvirtd.8.gz
 %endif
+
 
 %files client -f %{name}.lang
 %defattr(-, root, root)
@@ -747,6 +743,7 @@ fi
 %dir %{_datadir}/libvirt/schemas/
 
 %{_datadir}/libvirt/schemas/domain.rng
+%{_datadir}/libvirt/schemas/domainsnapshot.rng
 %{_datadir}/libvirt/schemas/network.rng
 %{_datadir}/libvirt/schemas/storagepool.rng
 %{_datadir}/libvirt/schemas/storagevol.rng
@@ -755,6 +752,7 @@ fi
 %{_datadir}/libvirt/schemas/interface.rng
 %{_datadir}/libvirt/schemas/secret.rng
 %{_datadir}/libvirt/schemas/storageencryption.rng
+%{_datadir}/libvirt/schemas/nwfilter.rng
 
 %{_datadir}/libvirt/cpu_map.xml
 
@@ -797,8 +795,34 @@ fi
 %endif
 
 %changelog
-* Fri Sep 10 2010 Sergio Rubio <srubio@abiquo.com> - 0.7.7-2.abiquo
-- disable lxc
+* Mon Dec 13 2010 Sergio Rubio <srubio@abiquo.com> - 0.8.4-4
+- rebuilt
+
+* Thu Oct 25 2010 Sergio Rubio <rubiojr@frameos.org> - 0.8.4-3frameos
+- disable netcf support
+
+* Thu Oct 14 2010 Sergio Rubio <rubiojr@frameos.org> - 0.8.4-2frameos
+- disable avahi support
+
+* Thu Oct 14 2010 Sergio Rubio <rubiojr@frameos.org> - 0.8.4-1frameos
+- updated to 0.8.4
+
+* Mon Aug 10 2010 Sergio Rubio <sergio@rubio.name> - 0.8.3-3frameos
+- add modprobe.d disable-nf-bridge.conf script
+
+* Mon Aug 10 2010 Sergio Rubio <sergio@rubio.name> - 0.8.3-2frameos
+- use --with-rhel5-api
+- usec --without-lxc
+
+* Mon Aug 10 2010 Sergio Rubio <sergio@rubio.name> - 0.8.3-1frameos
+- updated to upstream 0.8.3
+
+* Mon Jul 01 2010 Sergio Rubio <sergio@rubio.name> - 0.8.1-1frameos
+- enable netcf
+- updated to upstream 0.8.1
+
+* Mon Apr 26 2010 Sergio Rubio <sergio@rubio.name> - 0.7.7-2frameos
+- Tweaked default libvirtd config and sysconfig files
 
 * Fri Mar  5 2010 Daniel Veillard <veillard@redhat.com> - 0.7.7-1
 - macvtap support
